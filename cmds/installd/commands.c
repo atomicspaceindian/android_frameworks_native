@@ -22,6 +22,7 @@
 
 /* Directory records that are used in execution of commands. */
 dir_rec_t android_data_dir;
+dir_rec_t android_datadata_dir;
 dir_rec_t android_asec_dir;
 dir_rec_t android_app_dir;
 dir_rec_t android_app_private_dir;
@@ -85,18 +86,18 @@ int install(const char *pkgname, uid_t uid, gid_t gid, const char *seinfo)
         }
     }
 
+    if (selinux_android_setfilecon(pkgdir, pkgname, seinfo, uid) < 0) {
+        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
+        unlink(libsymlink);
+        unlink(pkgdir);
+        return -errno;
+    }
+
     if (symlink(applibdir, libsymlink) < 0) {
         ALOGE("couldn't symlink directory '%s' -> '%s': %s\n", libsymlink, applibdir,
                 strerror(errno));
         unlink(pkgdir);
         return -1;
-    }
-
-    if (selinux_android_setfilecon2(pkgdir, pkgname, seinfo, uid) < 0) {
-        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
-        unlink(libsymlink);
-        unlink(pkgdir);
-        return -errno;
     }
 
     if (chown(pkgdir, uid, gid) < 0) {
@@ -185,7 +186,7 @@ int delete_user_data(const char *pkgname, userid_t userid)
     return delete_dir_contents(pkgdir, 0, "lib");
 }
 
-int make_user_data(const char *pkgname, uid_t uid, userid_t userid)
+int make_user_data(const char *pkgname, uid_t uid, userid_t userid, const char* seinfo)
 {
     char pkgdir[PKG_PATH_MAX];
     char applibdir[PKG_PATH_MAX];
@@ -239,18 +240,18 @@ int make_user_data(const char *pkgname, uid_t uid, userid_t userid)
         }
     }
 
+    if (selinux_android_setfilecon(pkgdir, pkgname, seinfo, uid) < 0) {
+        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
+        unlink(libsymlink);
+        unlink(pkgdir);
+        return -errno;
+    }
+
     if (symlink(applibdir, libsymlink) < 0) {
         ALOGE("couldn't symlink directory for non-primary '%s' -> '%s': %s\n", libsymlink,
                 applibdir, strerror(errno));
         unlink(pkgdir);
         return -1;
-    }
-
-    if (selinux_android_setfilecon(pkgdir, pkgname, uid) < 0) {
-        ALOGE("cannot setfilecon dir '%s': %s\n", pkgdir, strerror(errno));
-        unlink(libsymlink);
-        unlink(pkgdir);
-        return -errno;
     }
 
     if (chown(pkgdir, uid, uid) < 0) {
@@ -461,7 +462,11 @@ int get_size(const char *pkgname, userid_t userid, const char *apkpath,
     }
 
         /* add in size of any libraries */
-    if (libdirpath != NULL && libdirpath[0] != '!') {
+        /* If the app is on the SD card, the libraries are stored in asecpath.
+         * If we don't check that asecpath is defined, the libraries will be
+         * counted twice. Once in asecsize and once in codesize. */
+    if ((asecpath == NULL || asecpath[0] == '!') &&
+            libdirpath != NULL && libdirpath[0] != '!') {
         d = opendir(libdirpath);
         if (d != NULL) {
             dfd = dirfd(d);
@@ -546,6 +551,7 @@ int create_cache_path(char path[PKG_PATH_MAX], const char *src)
     char *tmp;
     int srclen;
     int dstlen;
+    char dexopt_data_only[PROPERTY_VALUE_MAX];
 
     srclen = strlen(src);
 
@@ -558,7 +564,15 @@ int create_cache_path(char path[PKG_PATH_MAX], const char *src)
         return -1;
     }
 
-    dstlen = srclen + strlen(DALVIK_CACHE_PREFIX) + 
+    const char *cache_path = DALVIK_CACHE_PREFIX;
+    if (!strncmp(src, "/system", 7)) {
+        property_get("dalvik.vm.dexopt-data-only", dexopt_data_only, "1");
+        if (strcmp(dexopt_data_only, "1") != 0) {
+            cache_path = DALVIK_SYSTEM_CACHE_PREFIX;
+        }
+    }
+
+    dstlen = srclen + strlen(cache_path) + 
         strlen(DALVIK_CACHE_POSTFIX) + 1;
     
     if (dstlen > PKG_PATH_MAX) {
@@ -566,11 +580,11 @@ int create_cache_path(char path[PKG_PATH_MAX], const char *src)
     }
 
     sprintf(path,"%s%s%s",
-            DALVIK_CACHE_PREFIX,
+            cache_path,
             src + 1, /* skip the leading / */
             DALVIK_CACHE_POSTFIX);
     
-    for(tmp = path + strlen(DALVIK_CACHE_PREFIX); *tmp; tmp++) {
+    for(tmp = path + strlen(cache_path); *tmp; tmp++) {
         if (*tmp == '/') {
             *tmp = '@';
         }
@@ -1099,6 +1113,35 @@ out:
     }
 
     return rc;
+}
+
+int restorecon_data()
+{
+    char *data_dir = build_string2(android_data_dir.path, PRIMARY_USER_PREFIX);
+    char *user_dir = build_string2(android_data_dir.path, SECONDARY_USER_PREFIX);
+
+    unsigned int flags = SELINUX_ANDROID_RESTORECON_RECURSE |
+            SELINUX_ANDROID_RESTORECON_DATADATA;
+
+    int ret = 0;
+
+    if (!data_dir || !user_dir) {
+        return -1;
+    }
+
+    if (selinux_android_restorecon(data_dir, flags) < 0) {
+        ALOGE("restorecon failed for %s: %s\n", data_dir, strerror(errno));
+        ret |= -1;
+    }
+
+    if (selinux_android_restorecon(user_dir, flags) < 0) {
+        ALOGE("restorecon failed for %s: %s\n", user_dir, strerror(errno));
+        ret |= -1;
+    }
+
+    free(data_dir);
+    free(user_dir);
+    return ret;
 }
 
 static void run_idmap(const char *target_apk, const char *overlay_apk, int idmap_fd,

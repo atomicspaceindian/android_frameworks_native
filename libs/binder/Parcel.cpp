@@ -628,7 +628,6 @@ status_t Parcel::writeInt32Array(size_t len, const int32_t *val) {
     }
     return ret;
 }
-
 status_t Parcel::writeByteArray(size_t len, const uint8_t *val) {
     if (!val) {
         return writeAligned(-1);

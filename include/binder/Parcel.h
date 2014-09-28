@@ -104,7 +104,6 @@ public:
     status_t            writeInt32Array(size_t len, const int32_t *val);
     status_t            writeByteArray(size_t len, const uint8_t *val);
 
-
     template<typename T>
     status_t            write(const Flattenable<T>& val);
 

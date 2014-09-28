@@ -37,6 +37,7 @@ enum {
     QUEUE_BUFFER,
     CANCEL_BUFFER,
     QUERY,
+    SET_BUFFERS_SIZE,
     CONNECT,
     DISCONNECT,
 };
@@ -179,6 +180,19 @@ public:
         result = reply.readInt32();
         return result;
     }
+
+    virtual status_t setBuffersSize(int size) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
+        data.writeInt32(size);
+        status_t result = remote()->transact(SET_BUFFERS_SIZE, data, &reply);
+        if (result != NO_ERROR) {
+            return result;
+        }
+        result = reply.readInt32();
+        return result;
+    }
+
 };
 
 IMPLEMENT_META_INTERFACE(GraphicBufferProducer, "android.gui.IGraphicBufferProducer");
@@ -254,6 +268,13 @@ status_t BnGraphicBufferProducer::onTransact(
             reply->writeInt32(res);
             return NO_ERROR;
         } break;
+        case SET_BUFFERS_SIZE: {
+            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
+            int size = data.readInt32();
+            status_t res = setBuffersSize(size);
+            reply->writeInt32(res);
+            return NO_ERROR;
+        } break;
         case CONNECT: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             sp<IBinder> token = data.readStrongBinder();
@@ -287,6 +308,9 @@ size_t IGraphicBufferProducer::QueueBufferInput::getFlattenedSize() const {
     return sizeof(timestamp)
          + sizeof(isAutoTimestamp)
          + sizeof(crop)
+#ifdef QCOM_BSP
+         + sizeof(dirtyRect)
+#endif
          + sizeof(scalingMode)
          + sizeof(transform)
          + sizeof(async)
@@ -306,6 +330,9 @@ status_t IGraphicBufferProducer::QueueBufferInput::flatten(
     FlattenableUtils::write(buffer, size, timestamp);
     FlattenableUtils::write(buffer, size, isAutoTimestamp);
     FlattenableUtils::write(buffer, size, crop);
+#ifdef QCOM_BSP
+    FlattenableUtils::write(buffer, size, dirtyRect);
+#endif
     FlattenableUtils::write(buffer, size, scalingMode);
     FlattenableUtils::write(buffer, size, transform);
     FlattenableUtils::write(buffer, size, async);
@@ -319,6 +346,9 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
               sizeof(timestamp)
             + sizeof(isAutoTimestamp)
             + sizeof(crop)
+#ifdef QCOM_BSP
+            + sizeof(dirtyRect)
+#endif
             + sizeof(scalingMode)
             + sizeof(transform)
             + sizeof(async);
@@ -330,6 +360,9 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
     FlattenableUtils::read(buffer, size, timestamp);
     FlattenableUtils::read(buffer, size, isAutoTimestamp);
     FlattenableUtils::read(buffer, size, crop);
+#ifdef QCOM_BSP
+    FlattenableUtils::read(buffer, size, dirtyRect);
+#endif
     FlattenableUtils::read(buffer, size, scalingMode);
     FlattenableUtils::read(buffer, size, transform);
     FlattenableUtils::read(buffer, size, async);
